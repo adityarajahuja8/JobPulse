@@ -62,23 +62,14 @@ async def get_listings(
         log.info("api.get_listings.force_refresh")
         await run_once()
 
-    database = db.get_db()
-    query: dict[str, Any] = {}
-    if source:
-        query["source"] = source
+    listings: list[dict[str, Any]] = []
 
-    cursor = (
-        database[db.LISTINGS_COLL]
-        .find(query, {"_id": 0, "raw": 0})
-        .sort("posted_at", -1)
-        .limit(limit)
-    )
-    listings = await cursor.to_list(length=limit)
+    try:
+        database = db.get_db()
+        query: dict[str, Any] = {}
+        if source:
+            query["source"] = source
 
-    # If DB is empty, run a one-shot ingestion automatically
-    if not listings:
-        log.info("api.get_listings.empty_db_triggering_run")
-        await run_once()
         cursor = (
             database[db.LISTINGS_COLL]
             .find(query, {"_id": 0, "raw": 0})
@@ -86,6 +77,42 @@ async def get_listings(
             .limit(limit)
         )
         listings = await cursor.to_list(length=limit)
+
+        # If DB is empty, run a one-shot ingestion automatically
+        if not listings:
+            log.info("api.get_listings.empty_db_triggering_run")
+            await run_once()
+            cursor = (
+                database[db.LISTINGS_COLL]
+                .find(query, {"_id": 0, "raw": 0})
+                .sort("posted_at", -1)
+                .limit(limit)
+            )
+            listings = await cursor.to_list(length=limit)
+
+    except Exception as db_err:
+        log.warning("api.get_listings.db_fallback_to_live", error=str(db_err))
+        # Live fetch fallback directly from enabled adapters
+        if source == "remoteok" or not source:
+            from acdyon.sources.remoteok import RemoteOKAdapter
+            rok_adapter = RemoteOKAdapter()
+            rok_raw = await rok_adapter.fetch_raw()
+            rok_docs = rok_adapter.parse(rok_raw)
+            for d in rok_docs:
+                d.pop("raw", None)
+            listings.extend(rok_docs)
+
+        if source == "jsearch" or not source:
+            from acdyon.sources.jsearch import JSearchAdapter
+            js_adapter = JSearchAdapter()
+            js_raw = await js_adapter.fetch_raw()
+            js_docs = js_adapter.parse(js_raw)
+            for d in js_docs:
+                d.pop("raw", None)
+            listings.extend(js_docs)
+
+        if limit and len(listings) > limit:
+            listings = listings[:limit]
 
     return {
         "status": "ok",
