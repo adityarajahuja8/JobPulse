@@ -31,6 +31,21 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+async def root():
+    return {
+        "status": "ok",
+        "service": "JobPulse / Acdyon Ingestion API",
+        "endpoints": {
+            "health": "/api/health",
+            "listings": "/api/listings",
+            "stats": "/api/stats",
+            "run": "/api/run"
+        }
+    }
+
+
+@app.get("/health")
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "acdyon-engine"}
