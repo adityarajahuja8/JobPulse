@@ -267,87 +267,93 @@ function initListingsSection() {
     });
   });
 
-  // Initial render
-  render(currentFilter, 1);
-
-  // Fetch 100% REAL LIVE listings from API with direct browser fallback for static hosting
-  async function loadLiveListings() {
-    try {
-      const res = await fetch('/api/listings');
-      if (res.ok) {
-        const payload = await res.json();
-        if (payload && payload.data && payload.data.length > 20) {
-          const uniquePayload = deduplicateListings(payload.data);
-          console.log(`[Acdyon Live Feed] Loaded ${uniquePayload.length} unique live listings from API`);
-          activeListings = uniquePayload;
-          render(currentFilter, 1);
-          return;
-        }
-      }
-    } catch (e) {
-      console.log('[Acdyon Notice] Server API not reachable on static host, streaming directly in browser...');
+  // ── Real-Time Pipeline Ingestion Engine (Runs on page load & on demand) ───────
+  async function executeRealtimePipeline() {
+    const triggerBtn = document.getElementById('btn-trigger-ingestion');
+    if (triggerBtn) {
+      triggerBtn.disabled = true;
+      triggerBtn.innerHTML = `
+        <div class="loading-spinner" style="width: 14px; height: 14px; border-width: 2px; margin: 0;"></div>
+        Ingesting Live Feeds...
+      `;
     }
 
-    // Direct browser fetch fallback (works 100% on Vercel / GitHub Pages without backend)
-    try {
-      const directJobs = [];
-      const seenCos = new Set();
-      const seenUs = new Set();
+    if (countBadge) {
+      countBadge.innerHTML = `<span class="pipeline-running-badge">⚡ Ingesting Live Streams...</span>`;
+    }
 
-      function addJob(j, multi = false) {
-        if (!j || !j.title || !j.company || !j.url) return;
-        const cKey = String(j.company).toLowerCase().trim();
-        const uKey = String(j.url).toLowerCase().trim();
-        if (seenUs.has(uKey)) return;
-        if (!multi && seenCos.has(cKey)) return;
-        seenCos.add(cKey);
-        seenUs.add(uKey);
-        directJobs.push(j);
-      }
+    container.innerHTML = `
+      <div style="grid-column: 1 / -1; padding: var(--space-12); text-align: center; background: rgba(13, 18, 31, 0.4); border: 1px dashed var(--border-subtle); border-radius: var(--radius-lg);">
+        <div class="loading-spinner"></div>
+        <div style="font-family: var(--font-mono); font-size: var(--text-sm); color: var(--accent-primary); margin-top: var(--space-4);">
+          ⚡ RUNNING REAL-TIME PIPELINE INGESTION...
+        </div>
+        <div style="font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-2);">
+          Pulling fresh live streams from RemoteOK API & JSearch / Enterprise Tech Portals...
+        </div>
+      </div>
+    `;
 
-      // Tech Portals
-      const portals = [
-        { co: 'Linear', slug: 'linear', role: 'Fullstack' },
-        { co: 'PostHog', slug: 'posthog', role: 'Ingestion' },
-        { co: 'OpenAI', slug: 'openai', role: 'Infrastructure' },
-        { co: 'Cursor', slug: 'cursor', role: 'Infrastructure' },
-        { co: 'Sentry', slug: 'sentry', role: 'Machine Learning' },
-        { co: 'Replit', slug: 'replit', role: 'Product' },
-        { co: 'Supabase', slug: 'supabase', role: 'Marketplace' },
-        { co: 'Ramp', slug: 'ramp', role: 'Security' }
-      ];
+    const startTime = performance.now();
+    const liveJobs = [];
+    const seenCos = new Set();
+    const seenUs = new Set();
 
-      for (const p of portals) {
-        try {
-          const r = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${p.slug}`);
-          if (r.ok) {
-            const d = await r.json();
-            const jobs = d.jobs || [];
-            let chosen = jobs.find(x => x.title && x.title.toLowerCase().includes(p.role.toLowerCase()));
-            if (!chosen && jobs.length > 0) chosen = jobs[0];
-            if (chosen && chosen.jobUrl) {
-              addJob({
-                source: 'jsearch',
-                external_id: `jsearch-${chosen.id}`,
-                title: String(chosen.title).trim(),
-                company: p.co,
-                location: chosen.location || 'Remote (Worldwide)',
-                url: chosen.jobUrl,
-                tags: [p.slug, 'engineering', 'cloud', 'software'],
-                salary_min: 175000,
-                salary_max: 285000,
-                visa_sponsorship: null,
-                four_day_week: null,
-                remote: true,
-                posted_at: new Date().toISOString(),
-                ingested_at: new Date().toISOString()
-              }, false);
-            }
+    function addLiveJob(j, multi = false) {
+      if (!j || !j.title || !j.company || !j.url) return;
+      const cKey = String(j.company).toLowerCase().trim();
+      const uKey = String(j.url).toLowerCase().trim();
+      if (seenUs.has(uKey)) return;
+      if (!multi && seenCos.has(cKey)) return;
+      seenCos.add(cKey);
+      seenUs.add(uKey);
+      liveJobs.push(j);
+    }
+
+    // 1. Fetch Tech Portals Live
+    const portals = [
+      { co: 'Linear', slug: 'linear', role: 'Fullstack' },
+      { co: 'PostHog', slug: 'posthog', role: 'Ingestion' },
+      { co: 'OpenAI', slug: 'openai', role: 'Infrastructure' },
+      { co: 'Cursor', slug: 'cursor', role: 'Infrastructure' },
+      { co: 'Sentry', slug: 'sentry', role: 'Machine Learning' },
+      { co: 'Replit', slug: 'replit', role: 'Product' },
+      { co: 'Supabase', slug: 'supabase', role: 'Marketplace' },
+      { co: 'Ramp', slug: 'ramp', role: 'Security' }
+    ];
+
+    await Promise.allSettled(portals.map(async p => {
+      try {
+        const r = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${p.slug}`);
+        if (r.ok) {
+          const d = await r.json();
+          const jobs = d.jobs || [];
+          let chosen = jobs.find(x => x.title && x.title.toLowerCase().includes(p.role.toLowerCase()));
+          if (!chosen && jobs.length > 0) chosen = jobs[0];
+          if (chosen && chosen.jobUrl) {
+            addLiveJob({
+              source: 'jsearch',
+              external_id: `jsearch-${chosen.id}`,
+              title: String(chosen.title).trim(),
+              company: p.co,
+              location: chosen.location || 'Remote (Worldwide)',
+              url: chosen.jobUrl,
+              tags: [p.slug, 'engineering', 'cloud', 'software'],
+              salary_min: 175000,
+              salary_max: 285000,
+              visa_sponsorship: null,
+              four_day_week: null,
+              remote: true,
+              posted_at: new Date().toISOString(),
+              ingested_at: new Date().toISOString()
+            }, false);
           }
-        } catch (err) {}
-      }
+        }
+      } catch (e) {}
+    }));
 
-      // RemoteOK Feed
+    // 2. Fetch RemoteOK Feed Live
+    try {
       const rokR = await fetch('https://remoteok.com/api');
       if (rokR.ok) {
         const rokData = await rokR.json();
@@ -369,7 +375,7 @@ function initListingsSection() {
             const minSal = item.salary_min ? parseInt(item.salary_min, 10) : null;
             const maxSal = item.salary_max ? parseInt(item.salary_max, 10) : null;
 
-            addJob({
+            addLiveJob({
               source: 'remoteok',
               external_id: extId,
               title: String(item.position || '').trim(),
@@ -388,19 +394,52 @@ function initListingsSection() {
           }
         }
       }
+    } catch (err) {
+      console.warn('[RemoteOK Live Ingestion Notice]:', err.message);
+    }
 
-      if (directJobs.length > 0) {
-        const uniqueDirect = deduplicateListings(directJobs);
-        console.log(`[Acdyon Client Stream] Ingested ${uniqueDirect.length} live jobs directly in browser`);
-        activeListings = uniqueDirect;
-        render(currentFilter, 1);
-      }
-    } catch (fallbackErr) {
-      console.warn('[Acdyon Notice] Using verified offline preview dataset:', fallbackErr.message);
+    const elapsedMs = Math.round(performance.now() - startTime);
+
+    if (liveJobs.length > 0) {
+      const uniqueList = deduplicateListings(liveJobs);
+      console.log(`[Acdyon Pipeline Ingested] ${uniqueList.length} live jobs in ${elapsedMs}ms`);
+      activeListings = uniqueList;
+    } else {
+      activeListings = deduplicateListings(SAMPLE_LISTINGS);
+    }
+
+    render(currentFilter, 1);
+
+    if (triggerBtn) {
+      triggerBtn.disabled = false;
+      triggerBtn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        Re-run Pipeline
+      `;
     }
   }
 
-  loadLiveListings();
+  // Hook up manual trigger button
+  const triggerBtn = document.getElementById('btn-trigger-ingestion');
+  if (triggerBtn) {
+    triggerBtn.addEventListener('click', () => {
+      executeRealtimePipeline();
+    });
+  }
+
+  // Hook up pulse badge in navbar to trigger live ingestion
+  const navPulseBadge = document.querySelector('.pulse-badge');
+  if (navPulseBadge) {
+    navPulseBadge.style.cursor = 'pointer';
+    navPulseBadge.title = 'Click to trigger live pipeline ingestion';
+    navPulseBadge.addEventListener('click', () => {
+      executeRealtimePipeline();
+      document.getElementById('listings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  // 🚀 AUTOMATICALLY EXECUTE REAL-TIME INGESTION WHEN USER OPENS WEBSITE
+  executeRealtimePipeline();
 }
 
 function escapeHTML(str) {

@@ -112,8 +112,8 @@
         </p>
       </div>
 
-      <!-- Filter Bar -->
-      <div class="filter-bar">
+      <!-- Filter Bar & Real-Time Pipeline Actions -->
+      <div class="filter-bar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-4);">
         <div class="filter-chips">
           <button class="filter-chip active" data-filter="all">All Listings</button>
           <button class="filter-chip" data-filter="remoteok">RemoteOK Feed</button>
@@ -121,7 +121,13 @@
           <button class="filter-chip" data-filter="remote">Remote Only</button>
           <button class="filter-chip" data-filter="salary">With Compensation</button>
         </div>
-        <div class="listings-count-badge" id="listings-count">Showing listings...</div>
+        <div style="display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;">
+          <button id="btn-trigger-ingestion" class="btn-primary" style="padding: 0.45rem 1rem; font-size: var(--text-xs); display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            Run Pipeline Ingestion
+          </button>
+          <div class="listings-count-badge" id="listings-count">Initializing live pipeline...</div>
+        </div>
       </div>
 
       <!-- Job Cards Grid -->
