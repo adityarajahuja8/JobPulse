@@ -298,7 +298,8 @@ function initListingsSection() {
     let liveJobs = [];
 
     try {
-      const resp = await fetch('/api/listings');
+      const apiBase = import.meta.env.VITE_API_URL ? String(import.meta.env.VITE_API_URL).replace(/\/$/, '') : '';
+      const resp = await fetch(`${apiBase}/api/listings`);
       if (resp.ok) {
         const payload = await resp.json();
         if (payload && Array.isArray(payload.data)) {
