@@ -1,11 +1,22 @@
-# Acdyon
+# JobPulse (Acdyon Pipeline)
 
-Resilient, ethical job-listing ingestion pipeline.
+[![Tests](https://img.shields.io/badge/tests-45%20passed-brightgreen.svg)](tests/)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
+[![Vite](https://img.shields.io/badge/vite-5.4+-646CFF.svg)](https://vitejs.dev)
 
-Pulls job listings from **RemoteOK** (primary) and **Arbeitnow** (backup),
-normalises them into a unified schema, and stores them in MongoDB. Built to
-demonstrate the ingestion architecture described in `DESIGN.md` — pacing,
-identity, fallback ladder, schema-drift detection, and dead-letter queuing.
+A resilient, ethical, and fully observable job-listing ingestion pipeline and live dashboard.
+
+Pulls job listings from **RemoteOK** (primary) and **JSearch RapidAPI** (backup / enterprise tech stream), normalises them into a unified schema, and stores them in MongoDB with compound unique index deduplication. Features log-normal pacing jitter, 5-step exponential fallback ladder, schema-drift detection, and dead-letter queuing.
+
+---
+
+## Live Demo & Architecture
+
+- **GitHub Repository**: [github.com/adityarajahuja8/JobPulse](https://github.com/adityarajahuja8/JobPulse)
+- **Frontend Dashboard**: Vite + HTML/CSS/JS with live streaming, search/filter chips, and 8-item pagination.
+- **Backend API**: FastAPI REST endpoints on port 8000 (`GET /api/listings`, `GET /api/stats`, `POST /api/run`).
+- **CLI Engine**: Typer-powered pipeline manager (`init-db`, `run`, `watch`, `stats`, `sources`, `deadletter`).
 
 ---
 
@@ -14,46 +25,59 @@ identity, fallback ladder, schema-drift detection, and dead-letter queuing.
 ### 1. Prerequisites
 
 - Python 3.11+
-- MongoDB running locally (`mongod`) — or provide an Atlas connection string
+- MongoDB (`mongod` locally on `mongodb://localhost:27017` or MongoDB Atlas URI)
+- Node.js 18+ (for frontend web client)
 
-### 2. Install
+### 2. Installation & Setup
 
 ```bash
-git clone <repo>
-cd acdyon
-cp .env.example .env          # edit if needed
+git clone https://github.com/adityarajahuja8/JobPulse.git
+cd JobPulse
+
+# Python virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -e .[dev]
+
+# Copy environment config
+cp .env.example .env
 ```
 
-### 3. Initialise the database
+### 3. Initialize Database Indexes
 
 ```bash
-acdyon init-db
+python -m acdyon.cli init-db
 ```
 
-Creates indexes on `job_listings(source, external_id)` and `run_logs`.
+Creates unique compound index `(source, external_id)` ensuring 100% idempotent upserts.
 
-### 4. Run a one-shot ingestion
+### 4. Run One-Shot Ingestion
 
 ```bash
-acdyon run
+python -m acdyon.cli run
 ```
 
-Fetches from RemoteOK, then Arbeitnow. Normalises and upserts into MongoDB.
-Re-running is safe — documents are upserted on `(source, external_id)`, never
-duplicated.
+Fetches from RemoteOK and JSearch, normalizes, detects anomalies/drift, and upserts into MongoDB.
 
-### 5. Check stats
+```
+                          Run Results                           
+┌──────────┬──────────┬─────┬─────────┬────────┬───────┬───────┐
+│ Source   │ Listings │ New │ Updated │ Blocks │ Drift │ Error │
+├──────────┼──────────┼─────┼─────────┼────────┼───────┼───────┤
+│ remoteok │      100 │   0 │     100 │      0 │   ✓   │ None  │
+│ jsearch  │        8 │   0 │       8 │      0 │   ✓   │ None  │
+└──────────┴──────────┴─────┴─────────┴────────┴───────┴───────┘
+```
+
+### 5. Launch the Web Frontend Dashboard
 
 ```bash
-acdyon stats
+cd web
+npm install
+npm run dev
 ```
 
-### 6. Continuous watch mode
-
-```bash
-acdyon watch            # runs every RUN_INTERVAL_SECONDS (default: 300)
-```
+Open **`http://localhost:3000`** in your browser.
 
 ---
 
@@ -61,61 +85,48 @@ acdyon watch            # runs every RUN_INTERVAL_SECONDS (default: 300)
 
 | Command | Description |
 |---|---|
-| `acdyon init-db` | Create MongoDB indexes |
-| `acdyon run` | One-shot ingestion from all enabled sources |
-| `acdyon watch` | Scheduled continuous ingestion |
-| `acdyon stats [--n N]` | Last N run logs |
-| `acdyon deadletter` | List dead-letter (anomalous/blocked) items |
-| `acdyon sources` | Show enabled adapters and last run status |
+| `python -m acdyon.cli init-db` | Create MongoDB indexes |
+| `python -m acdyon.cli run` | Execute one-shot ingestion from all enabled sources |
+| `python -m acdyon.cli watch` | Scheduled continuous background ingestion |
+| `python -m acdyon.cli stats` | View last N run performance logs |
+| `python -m acdyon.cli sources` | Inspect enabled adapters, roles, and DB record counts |
+| `python -m acdyon.cli deadletter` | Inspect anomalous / quarantined payloads |
 
 ---
 
-## Architecture
+## Pipeline Architecture
 
 ```
-RemoteOK API ──┐
-               ├── SourceAdapter (base.py)
-Arbeitnow API ─┘        │
-                         ▼
-               pacing.py (log-normal jitter)
-               validator.py (anomaly detection)
-               fallback.py (back-off ladder)
-                         │
-                         ▼
-               runner.py (orchestrates cycle)
-                         │
-                         ▼
-               db.py → MongoDB
-               ├── job_listings  (upserted, deduplicated)
-               ├── run_logs      (per-run metrics)
-               └── dead_letters  (anomalous responses)
+RemoteOK API ──────┐
+                   ├── SourceAdapter (base.py)
+JSearch RapidAPI ──┘        │
+                            ▼
+                   pacing.py (log-normal distribution)
+                   validator.py (schema drift & block detection)
+                   fallback.py (5-step back-off ladder)
+                            │
+                            ▼
+                   runner.py (orchestrates ingestion cycle)
+                            │
+                            ▼
+                   db.py → MongoDB
+                   ├── job_listings    (compound unique index)
+                   ├── run_logs        (cycle metrics & timings)
+                   ├── schema_snapshots (drift detection baseline)
+                   └── dead_letters    (quarantined anomalies)
 ```
-
-See `DESIGN.md` for the full ingestion architecture.
-See `DECISIONS.md` for ToS commitments and out-of-scope boundaries.
 
 ---
 
-## Running Tests
+## Running Automated Tests
 
 ```bash
-pytest tests/ -v
+python -m pytest tests/ -v
 ```
 
-No real MongoDB or network calls required — all mocked via `mongomock-motor`
-and `respx`.
-
----
-
-## Environment Variables
-
-See `.env.example` for all options. Key ones:
-
-| Variable | Default | Description |
-|---|---|---|
-| `MONGODB_URL` | `mongodb://localhost:27017/acdyon` | MongoDB connection string |
-| `LOG_LEVEL` | `INFO` | Logging verbosity |
-| `RUN_INTERVAL_SECONDS` | `300` | Watch mode interval |
-| `PROXY_URL` | *(blank)* | Optional proxy — not needed for demo |
-| `REMOTEOK_ENABLED` | `true` | Enable RemoteOK adapter |
-| `ARBEITNOW_ENABLED` | `true` | Enable Arbeitnow adapter |
+**45 unit & integration tests** cover:
+- Adapters (RemoteOK & JSearch parsing, direct link verification, date handling)
+- Pacing engine (Log-normal distribution, μ/σ drift bounds)
+- Fallback ladder (Circuit-breaker, exponential back-off)
+- Schema drift & block-page detection (HTML challenge / Captcha traps)
+- Database upsert idempotency & compound uniqueness
