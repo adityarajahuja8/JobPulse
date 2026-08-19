@@ -18,7 +18,7 @@ export default defineConfig({
       configureServer(server) {
         let cachedResponse = null;
         let lastCacheTime = 0;
-        const CACHE_TTL_MS = 180000; // 3 minutes cache to respect upstream crawl delay & avoid rate-limits
+        const CACHE_TTL_MS = 60000; // 1 minute cache
 
         server.middlewares.use(async (req, res, next) => {
           if (req.url && req.url.startsWith('/api/listings')) {
@@ -33,73 +33,70 @@ export default defineConfig({
             }
 
             const allNormalized = [];
-            const seenCompanies = new Set();
             const seenUrls = new Set();
+            const seenExternalIds = new Set();
 
-            function addUnique(job, allowMultiPerCompany = false) {
+            function addUnique(job) {
               if (!job || !job.title || !job.company || !job.url) return;
-              const companyKey = String(job.company).toLowerCase().trim();
-              const titleKey = String(job.title).toLowerCase().trim();
+              const extKey = `${job.source}-${job.external_id}`;
               const urlKey = String(job.url).toLowerCase().trim();
 
-              if (seenUrls.has(urlKey)) return;
+              if (seenUrls.has(urlKey) || seenExternalIds.has(extKey)) return;
 
-              if (!allowMultiPerCompany && seenCompanies.has(companyKey)) {
-                return; // Enforce 1 distinct job per company
-              }
-
-              seenCompanies.add(companyKey);
+              seenExternalIds.add(extKey);
               seenUrls.add(urlKey);
               allNormalized.push(job);
             }
 
-            // ── 1. Fetch live distinct listings from Tech Portals (1 per company) ─
-            const techPortals = [
-              { co: 'Linear', slug: 'linear', roleFilter: 'Fullstack' },
-              { co: 'PostHog', slug: 'posthog', roleFilter: 'Ingestion' },
-              { co: 'OpenAI', slug: 'openai', roleFilter: 'Infrastructure' },
-              { co: 'Cursor', slug: 'cursor', roleFilter: 'Infrastructure' },
-              { co: 'Sentry', slug: 'sentry', roleFilter: 'Machine Learning' },
-              { co: 'Replit', slug: 'replit', roleFilter: 'Product' },
-              { co: 'Supabase', slug: 'supabase', roleFilter: 'Marketplace' },
-              { co: 'Ramp', slug: 'ramp', roleFilter: 'Security' }
-            ];
-
-            for (const p of techPortals) {
-              try {
-                const res = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${p.slug}`);
-                if (res.ok) {
-                  const data = await res.json();
-                  const jobs = data.jobs || [];
-                  // Match preferred role or fallback to first job
-                  let chosen = jobs.find(j => j.title && j.title.toLowerCase().includes(p.roleFilter.toLowerCase()));
-                  if (!chosen && jobs.length > 0) chosen = jobs[0];
-
-                  if (chosen && chosen.jobUrl) {
-                    const offsetHours = Math.floor(Math.random() * 24) + 1;
-                    const recentDate = new Date(Date.now() - offsetHours * 3600 * 1000).toISOString();
-
-                    addUnique({
-                      source: 'jsearch',
-                      external_id: `jsearch-${chosen.id}`,
-                      title: String(chosen.title).trim(),
-                      company: p.co,
-                      location: chosen.location || 'Remote (Worldwide)',
-                      url: chosen.jobUrl,
-                      tags: [p.slug, 'engineering', 'cloud', 'systems'],
-                      salary_min: 175000,
-                      salary_max: 285000,
-                      visa_sponsorship: null,
-                      four_day_week: null,
-                      remote: true,
-                      posted_at: recentDate,
-                      ingested_at: new Date().toISOString()
-                    }, false);
-                  }
+            // ── 1. Fetch live listings from JSearch RapidAPI /search-v2 ────────
+            try {
+              const rapidKey = process.env.RAPIDAPI_KEY || 'e50277eb37msh360b11bca7c1866p1ca014jsn36fef6c35f06';
+              const jsRes = await fetch('https://jsearch.p.rapidapi.com/search-v2?query=Software%20Engineer&country=us&date_posted=all', {
+                headers: {
+                  'x-rapidapi-key': rapidKey,
+                  'x-rapidapi-host': 'jsearch.p.rapidapi.com',
+                  'Content-Type': 'application/json'
                 }
-              } catch (e) {
-                // Skip transient network hiccup
+              });
+
+              if (jsRes.ok) {
+                const jsPayload = await jsRes.json();
+                const dataObj = jsPayload.data;
+                const jobs = Array.isArray(dataObj) ? dataObj : (dataObj && Array.isArray(dataObj.jobs) ? dataObj.jobs : []);
+
+                for (const item of jobs) {
+                  const extId = String(item.job_id || '');
+                  if (!extId) continue;
+
+                  const loc = item.job_location || item.job_city || (item.job_country ? item.job_country.toUpperCase() : 'Remote');
+                  const tags = [];
+                  if (Array.isArray(item.job_required_skills)) {
+                    tags.push(...item.job_required_skills.map(s => String(s).toLowerCase()));
+                  }
+                  if (item.job_employment_type) {
+                    tags.push(String(item.job_employment_type).toLowerCase());
+                  }
+
+                  addUnique({
+                    source: 'jsearch',
+                    external_id: extId,
+                    title: String(item.job_title || '').trim(),
+                    company: String(item.employer_name || '').trim(),
+                    location: loc,
+                    url: String(item.job_apply_link || '').trim(),
+                    tags: tags.slice(0, 6),
+                    salary_min: typeof item.job_min_salary === 'number' ? item.job_min_salary : null,
+                    salary_max: typeof item.job_max_salary === 'number' ? item.job_max_salary : null,
+                    visa_sponsorship: null,
+                    four_day_week: null,
+                    remote: Boolean(item.job_is_remote),
+                    posted_at: item.job_posted_at_datetime_utc || new Date().toISOString(),
+                    ingested_at: new Date().toISOString()
+                  });
+                }
               }
+            } catch (jsErr) {
+              console.warn('[JSearch Live Ingestion Warning]:', jsErr.message);
             }
 
             // ── 2. Fetch live listings from RemoteOK API ──────────────────────────
@@ -155,7 +152,7 @@ export default defineConfig({
                       remote: true,
                       posted_at: postedAt || new Date().toISOString(),
                       ingested_at: new Date().toISOString()
-                    }, true);
+                    });
                   }
                 }
               }

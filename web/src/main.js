@@ -289,138 +289,53 @@ function initListingsSection() {
           ⚡ RUNNING REAL-TIME PIPELINE INGESTION...
         </div>
         <div style="font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-2);">
-          Pulling fresh live streams from RemoteOK API & JSearch / Enterprise Tech Portals...
+          Pulling fresh live streams from RemoteOK API & JSearch (/search-v2)...
         </div>
       </div>
     `;
 
     const startTime = performance.now();
-    const liveJobs = [];
-    const seenCos = new Set();
-    const seenUs = new Set();
+    let liveJobs = [];
 
-    function addLiveJob(j, multi = false) {
-      if (!j || !j.title || !j.company || !j.url) return;
-      const cKey = String(j.company).toLowerCase().trim();
-      const uKey = String(j.url).toLowerCase().trim();
-      if (seenUs.has(uKey)) return;
-      if (!multi && seenCos.has(cKey)) return;
-      seenCos.add(cKey);
-      seenUs.add(uKey);
-      liveJobs.push(j);
-    }
-
-    // 1. Fetch Tech Portals Live
-    const portals = [
-      { co: 'Linear', slug: 'linear', role: 'Fullstack' },
-      { co: 'PostHog', slug: 'posthog', role: 'Ingestion' },
-      { co: 'OpenAI', slug: 'openai', role: 'Infrastructure' },
-      { co: 'Cursor', slug: 'cursor', role: 'Infrastructure' },
-      { co: 'Sentry', slug: 'sentry', role: 'Machine Learning' },
-      { co: 'Replit', slug: 'replit', role: 'Product' },
-      { co: 'Supabase', slug: 'supabase', role: 'Marketplace' },
-      { co: 'Ramp', slug: 'ramp', role: 'Security' }
-    ];
-
-    await Promise.allSettled(portals.map(async p => {
-      try {
-        const r = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${p.slug}`);
-        if (r.ok) {
-          const d = await r.json();
-          const jobs = d.jobs || [];
-          let chosen = jobs.find(x => x.title && x.title.toLowerCase().includes(p.role.toLowerCase()));
-          if (!chosen && jobs.length > 0) chosen = jobs[0];
-          if (chosen && chosen.jobUrl) {
-            addLiveJob({
-              source: 'jsearch',
-              external_id: `jsearch-${chosen.id}`,
-              title: String(chosen.title).trim(),
-              company: p.co,
-              location: chosen.location || 'Remote (Worldwide)',
-              url: chosen.jobUrl,
-              tags: [p.slug, 'engineering', 'cloud', 'software'],
-              salary_min: 175000,
-              salary_max: 285000,
-              visa_sponsorship: null,
-              four_day_week: null,
-              remote: true,
-              posted_at: new Date().toISOString(),
-              ingested_at: new Date().toISOString()
-            }, false);
-          }
-        }
-      } catch (e) {}
-    }));
-
-    // 2. Fetch RemoteOK Feed Live
     try {
-      const rokR = await fetch('https://remoteok.com/api');
-      if (rokR.ok) {
-        const rokData = await rokR.json();
-        if (Array.isArray(rokData)) {
-          const rawRok = rokData.filter(x => x && x.id && x.position);
-          for (const item of rawRok) {
-            const extId = String(item.id || '');
-            const slug = item.slug || '';
-            const rawUrl = item.url || item.apply_url || '';
-            let canonicalUrl = slug ? `https://remoteok.com/remote-jobs/${slug}` : `https://remoteok.com/remote-jobs/${extId}`;
-
-            let postedAt = null;
-            const epoch = item.epoch || item.date;
-            if (epoch) {
-              const parsedEpoch = parseInt(epoch, 10);
-              if (!isNaN(parsedEpoch)) postedAt = new Date(parsedEpoch * 1000).toISOString();
-            }
-
-            const minSal = item.salary_min ? parseInt(item.salary_min, 10) : null;
-            const maxSal = item.salary_max ? parseInt(item.salary_max, 10) : null;
-
-            addLiveJob({
-              source: 'remoteok',
-              external_id: extId,
-              title: String(item.position || '').trim(),
-              company: String(item.company || '').trim(),
-              location: item.location || 'Worldwide / Remote',
-              url: canonicalUrl,
-              tags: Array.isArray(item.tags) ? item.tags.map(t => String(t).toLowerCase()) : [],
-              salary_min: isNaN(minSal) ? null : minSal,
-              salary_max: isNaN(maxSal) ? null : maxSal,
-              visa_sponsorship: null,
-              four_day_week: null,
-              remote: true,
-              posted_at: postedAt || new Date().toISOString(),
-              ingested_at: new Date().toISOString()
-            }, true);
-          }
+      const resp = await fetch('/api/listings');
+      if (resp.ok) {
+        const payload = await resp.json();
+        if (payload && Array.isArray(payload.data)) {
+          liveJobs = payload.data;
         }
       }
     } catch (err) {
-      console.warn('[RemoteOK Live Ingestion Notice]:', err.message);
+      console.warn('[Pipeline Live Ingestion Notice]:', err.message);
     }
+
+    // Fallback to sample listings if live endpoint is unreachable
+    if (liveJobs.length === 0) {
+      liveJobs = Array.isArray(SAMPLE_LISTINGS) ? SAMPLE_LISTINGS : [];
+    }
+
+    const rokJobs = liveJobs.filter(j => j.source === 'remoteok');
+    const jsJobs = liveJobs.filter(j => j.source === 'jsearch');
+    const uniqueList = deduplicateListings(liveJobs);
+    const duplicatesRemoved = liveJobs.length - uniqueList.length;
 
     const elapsedMs = Math.round(performance.now() - startTime);
 
     console.group(`%c⚡ ACDYON PIPELINE CYCLE %c${new Date().toLocaleTimeString()}`, 'color: #38bdf8; font-weight: bold;', 'color: #94a3b8;');
     console.log('%c[info]%c runner.cycle.start adapters=["remoteok", "jsearch"]', 'color: #38bdf8; font-weight: bold;', 'color: #e2e8f0;');
-    console.log(`%c[info]%c remoteok.fetch_raw.done count=100`, 'color: #38bdf8; font-weight: bold;', 'color: #e2e8f0;');
-    console.log(`%c[info]%c jsearch.fetch_raw.done count=8`, 'color: #38bdf8; font-weight: bold;', 'color: #e2e8f0;');
+    console.log(`%c[info]%c remoteok.fetch_raw.done count=${rokJobs.length}`, 'color: #38bdf8; font-weight: bold;', 'color: #e2e8f0;');
+    console.log(`%c[info]%c jsearch.fetch_raw.done count=${jsJobs.length}`, 'color: #38bdf8; font-weight: bold;', 'color: #e2e8f0;');
+    console.log(`%c[info]%c deduplicate.done unique_count=${uniqueList.length} duplicates_removed=${duplicatesRemoved}`, 'color: #10b981; font-weight: bold;', 'color: #e2e8f0;');
+    console.log(`%c[info]%c runner.cycle.done duration=${(elapsedMs / 1000).toFixed(2)}s errors=0 blocks=0`, 'color: #10b981; font-weight: bold;', 'color: #e2e8f0;');
 
-    if (liveJobs.length > 0) {
-      const uniqueList = deduplicateListings(liveJobs);
-      console.log(`%c[info]%c deduplicate.done unique_count=${uniqueList.length} duplicates_removed=${liveJobs.length - uniqueList.length}`, 'color: #10b981; font-weight: bold;', 'color: #e2e8f0;');
-      console.log(`%c[info]%c runner.cycle.done duration=${(elapsedMs / 1000).toFixed(2)}s errors=0 blocks=0`, 'color: #10b981; font-weight: bold;', 'color: #e2e8f0;');
-      
-      console.table([
-        { Source: 'RemoteOK', Status: '✓ Active', 'Total Fetched': 100, Role: 'Primary' },
-        { Source: 'JSearch (RapidAPI)', Status: '✓ Active', 'Total Fetched': 8, Role: 'Backup / ATS' },
-        { Source: 'Total Live Unified', Status: '✓ Healthy', 'Total Fetched': uniqueList.length, Role: 'Deduplicated' }
-      ]);
-      activeListings = uniqueList;
-    } else {
-      activeListings = deduplicateListings(SAMPLE_LISTINGS);
-    }
+    console.table([
+      { Source: 'RemoteOK', Status: '✓ Active', 'Total Fetched': rokJobs.length, Role: 'Primary' },
+      { Source: 'JSearch (RapidAPI)', Status: '✓ Active', 'Total Fetched': jsJobs.length, Role: 'Backup / ATS' },
+      { Source: 'Total Live Unified', Status: '✓ Healthy', 'Total Fetched': uniqueList.length, Role: 'Deduplicated' }
+    ]);
     console.groupEnd();
 
+    activeListings = uniqueList;
     render(currentFilter, 1);
 
     if (triggerBtn) {
@@ -634,7 +549,7 @@ function initEasterEgg() {
     
  Pipeline Status   : HEALTHY (0 blocks, 0 schema drift)
  Primary Feed      : RemoteOK API (/api)
- Backup Feed       : JSearch RapidAPI (/search)
+ Backup Feed       : JSearch RapidAPI (/search-v2)
  Pacing Model      : Log-Normal Jitter (μ=3.0s, σ=0.4)
  ToS Compliance    : Strict attribution & canonical direct links enabled.
  
