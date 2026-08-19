@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Acdyon — Resilient, Ethical Job Data Ingestion Pipeline</title>
+  <meta name="description" content="Ingest millions of job listings without breaking, getting blocked, or violating ToS. Automated multi-source normalization, log-normal human pacing, and 5-step fallback ladders.">
+  
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="./src/styles/main.css">
+</head>
+<body>
+  <div class="bg-grid-overlay"></div>
+
+  <!-- Navbar -->
+  <header class="navbar">
+    <div class="container nav-container">
+      <a href="#" class="nav-logo">
+        <div class="logo-symbol">A</div>
+        <span>Acdyon</span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="#listings" class="nav-link">Live Listings</a></li>
+        <li><a href="#pipeline" class="nav-link">Schema Inspector</a></li>
+        <li><a href="#architecture" class="nav-link">Architecture</a></li>
+        <li><a href="#telemetry" class="nav-link">Telemetry</a></li>
+      </ul>
+      <div class="nav-actions">
+        <div class="status-pill" id="engine-status-pill">
+          <span class="status-indicator"></span>
+          <span class="status-text">Engine: Active</span>
+        </div>
+        <a href="#listings" class="btn btn-primary" style="padding: 0.5rem 1rem; font-size: var(--text-xs);">
+          Browse Listings
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero-section">
+    <div class="container hero-content">
+      <div class="hero-pill-wrapper">
+        <div class="status-pill">
+          <span class="status-indicator"></span>
+          <span>ToS-Compliant Multi-Source Ingestion</span>
+        </div>
+      </div>
+      <h1 class="hero-title">
+        Ingest job listings at scale without breaking, <span class="text-gradient">getting blocked, or violating ToS</span>.
+      </h1>
+      <p class="hero-subhead">
+        Acdyon replaces fragile scrapers with unified source adapters, human-realistic log-normal pacing, automated schema drift quarantine, and a 5-step self-healing fallback ladder.
+      </p>
+      <div class="hero-cta-group">
+        <a href="#listings" class="btn btn-primary">
+          Explore Ingested Listings
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+        <a href="#pipeline" class="btn btn-secondary">
+          Inspect Schema & Pipeline
+        </a>
+      </div>
+
+      <!-- Telemetry Quick Tiles -->
+      <div class="telemetry-grid" id="telemetry">
+        <div class="metric-card">
+          <div class="metric-label">Ingestion Rate</div>
+          <div class="metric-value" data-target="750" data-suffix=" /run">0 /run</div>
+          <div class="metric-trend">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+            RemoteOK + JSearch API
+          </div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Block / Incident Rate</div>
+          <div class="metric-value" data-target="0" data-suffix="%">0%</div>
+          <div class="metric-trend" style="color: var(--accent-emerald);">
+            ● Jitter Paced
+          </div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Schema Consistency</div>
+          <div class="metric-value" data-target="100" data-suffix="%">0%</div>
+          <div class="metric-trend">
+            Auto-Drift Detection
+          </div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Pipeline Latency</div>
+          <div class="metric-value" data-target="44" data-suffix="s">0s</div>
+          <div class="metric-trend">
+            Idempotent Upsert
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Live Job Listings Section (Human-Readable Preview) -->
+  <section class="product-show-section" id="listings" style="padding-bottom: var(--space-12);">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">Normalized Pipeline Stream</div>
+        <h2 class="section-title">Ingested Job Listings</h2>
+        <p class="section-desc">
+          Browse real job postings normalized across RemoteOK and JSearch (RapidAPI) feeds. Click any listing to visit the canonical direct link.
+        </p>
+      </div>
+
+      <!-- Filter Bar -->
+      <div class="filter-bar">
+        <div class="filter-chips">
+          <button class="filter-chip active" data-filter="all">All Listings</button>
+          <button class="filter-chip" data-filter="remoteok">RemoteOK Feed</button>
+          <button class="filter-chip" data-filter="jsearch">JSearch (RapidAPI)</button>
+          <button class="filter-chip" data-filter="remote">Remote Only</button>
+          <button class="filter-chip" data-filter="salary">With Compensation</button>
+        </div>
+        <div class="listings-count-badge" id="listings-count">Showing listings...</div>
+      </div>
+
+      <!-- Job Cards Grid -->
+      <div class="listings-grid" id="listings-container">
+        <!-- Dynamically rendered via main.js -->
+      </div>
+
+      <!-- Pagination Controls -->
+      <div class="pagination-bar" id="pagination-controls">
+        <!-- Dynamically rendered via main.js -->
+      </div>
+    </div>
+  </section>
+
+  <!-- Product Show Section (Interactive Inspector) -->
+  <section class="product-show-section" id="pipeline">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">Interactive Pipeline Demo</div>
+        <h2 class="section-title">See the Ingestion Engine in Action</h2>
+        <p class="section-desc">
+          Compare heterogeneous source feeds, verify real-time schema normalization, and inspect the 5-step fallback ladder.
+        </p>
+      </div>
+
+      <div class="glass-panel inspector-card">
+        <div class="inspector-nav">
+          <div class="tab-group">
+            <button class="tab-btn active" data-tab="normalized">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+              Normalized Output
+            </button>
+            <button class="tab-btn" data-tab="raw">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              Raw Input Feeds
+            </button>
+            <button class="tab-btn" data-tab="ladder">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+              5-Step Fallback Ladder
+            </button>
+          </div>
+          <div id="inspector-summary"></div>
+        </div>
+
+        <div class="code-terminal">
+          <div class="terminal-header">
+            <div class="terminal-dots">
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+            </div>
+            <div class="terminal-title">pipeline-stream-inspector.json</div>
+            <div style="font-size: 0.7rem; color: var(--accent-emerald);">● LIVE MONGODB FEED</div>
+          </div>
+          <pre class="terminal-body"><code id="inspector-content"></code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture Section -->
+  <section class="features-section" id="architecture">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">Core Architecture</div>
+        <h2 class="section-title">Engineered for Extreme Pipeline Reliability</h2>
+        <p class="section-desc">
+          Every layer is designed to look like N bored humans rather than 1 fast robot, while respecting upstream platform terms.
+        </p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <h3 class="feature-title">Log-Normal Jitter Pacing</h3>
+          <p class="feature-text">
+            Avoids naive periodic sleep intervals. Delays are modeled with log-normal distributions and occasional long pauses that reflect human browsing physics.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+          </div>
+          <h3 class="feature-title">Swappable Source Adapters</h3>
+          <p class="feature-text">
+            Ingestion feeds sit behind an abstract <code>SourceAdapter</code> interface. Swapping a source or adding new partners requires zero changes downstream.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3 class="feature-title">Schema-Drift Quarantine</h3>
+          <p class="feature-text">
+            Every run compares output field structures against known-good schema snapshots. Format mutations fail loudly into dead-letter queues rather than corrupting databases.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <h3 class="feature-title">De-escalating Fallback Ladder</h3>
+          <p class="feature-text">
+            When an endpoint throttles: cool down session → rotate proxy node → global volume drop → fail over to backup source → alert human. Never escalates or attacks bot defenses.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          </div>
+          <h3 class="feature-title">Strict ToS Attribution</h3>
+          <p class="feature-text">
+            Full compliance with platform feeds: direct canonical URLs without tracking wrappers or redirects, and explicit source attribution recorded in every document.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          </div>
+          <h3 class="feature-title">Idempotent MongoDB Store</h3>
+          <p class="feature-text">
+            Unique compound indexing on <code>(source, external_id)</code> guarantees seamless updates and zero duplicated documents across repeated runs.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-content">
+      <div>
+        <strong>Acdyon Engine</strong> — Resilient, ethical job-listing ingestion pipeline.
+      </div>
+      <div class="footer-links">
+        <a href="#listings" class="footer-link">Live Listings</a>
+        <a href="#pipeline" class="footer-link">Schema Inspector</a>
+        <a href="#architecture" class="footer-link">Architecture</a>
+        <a href="https://github.com" target="_blank" class="footer-link">GitHub</a>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
