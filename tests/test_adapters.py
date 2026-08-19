@@ -12,6 +12,7 @@ import respx
 from httpx import Response
 
 from tests.conftest import JSEARCH_FIXTURE, REMOTEOK_FIXTURE
+from acdyon.config import settings
 from acdyon.sources.remoteok import RemoteOKAdapter
 from acdyon.sources.jsearch import JSearchAdapter
 
@@ -160,6 +161,108 @@ class TestJSearchAdapter:
         doc = adapter.parse(JSEARCH_FIXTURE["data"])[0]
         assert "raw" in doc
         assert doc["raw"]["job_id"] == "google-swe-12345"
+
+    # ── Decoupled parameters & request construction tests ────────────────────
+
+    def test_build_request_params_role_and_country_specified(self):
+        """query must contain ONLY the role; country and location are separate params."""
+        adapter = JSearchAdapter(role="data analyst", country="in")
+        params = adapter.build_request_params()
+
+        assert params["query"] == "data analyst"
+        assert "in" not in params["query"]  # Location NOT merged into query
+        assert params["country"] == "in"
+        assert "location" not in params
+
+    def test_build_request_params_with_location_specified(self):
+        """location must be passed exclusively as its own parameter, and work_from_home for remote."""
+        adapter = JSearchAdapter(role="python developer", country="us", location="Texas", remote_only=True)
+        params = adapter.build_request_params()
+
+        assert params["query"] == "python developer"
+        assert "Texas" not in params["query"]
+        assert "in" not in params["query"]
+        assert params["country"] == "us"
+        assert params["location"] == "Texas"
+        assert params["work_from_home"] == "true"
+
+    def test_build_request_params_country_agnostic_when_none(self):
+        """When country is explicitly None, it should not send a country param."""
+        adapter = JSearchAdapter(role="Staff DevOps", country=None)
+        params = adapter.build_request_params()
+
+        assert params["query"] == "Staff DevOps"
+        assert "country" not in params
+
+    def test_build_request_params_defaults_when_unspecified(self):
+        """When neither is specified, use clearly documented app-wide defaults."""
+        adapter = JSearchAdapter()
+        params = adapter.build_request_params()
+
+        assert params["query"] == settings.jsearch_default_role
+        assert params["country"] == settings.jsearch_default_country
+
+    # ── Natural language prompt parsing tests ────────────────────────────────
+
+    def test_parse_search_prompt_with_role_and_country(self):
+        from acdyon.sources.jsearch import parse_search_prompt
+
+        res = parse_search_prompt("Find data analyst jobs in India")
+        assert res["role"] == "data analyst"
+        assert res["country"] == "in"
+        assert res["location"] is None
+        assert res["remote_only"] is False
+
+    def test_parse_search_prompt_with_remote_and_location(self):
+        from acdyon.sources.jsearch import parse_search_prompt
+
+        res = parse_search_prompt("Remote python developer in Texas, USA")
+        assert res["role"] == "python developer"
+        assert res["country"] == "us"
+        assert res["location"] == "Texas"
+        assert res["remote_only"] is True
+
+    def test_parse_search_prompt_unspecified_leaves_fields_unset(self):
+        from acdyon.sources.jsearch import parse_search_prompt
+
+        res = parse_search_prompt("")
+        assert res["role"] is None
+        assert res["country"] is None
+        assert res["location"] is None
+
+    # ── Fetch raw with search-v2 endpoint & error handling tests ─────────────
+
+    @respx.mock
+    async def test_fetch_raw_calls_search_v2_endpoint_and_preserves_all_jobs(self, respx_mock):
+        """fetch_raw() must call /search-v2 with exact params and preserve all returned jobs."""
+        adapter = JSearchAdapter(role="data analyst", country="in", page=1, num_pages=1)
+        
+        mock_route = respx_mock.get("https://jsearch.p.rapidapi.com/search-v2").mock(
+            return_value=Response(200, json={"status": "OK", "data": {"jobs": JSEARCH_FIXTURE["data"], "cursor": None}})
+        )
+
+        results = await adapter.fetch_raw()
+
+        assert mock_route.called
+        req = mock_route.calls.last.request
+        assert req.url.params["query"] == "data analyst"
+        assert req.url.params["country"] == "in"
+        assert len(results) == len(JSEARCH_FIXTURE["data"])
+        assert results[0]["job_id"] == "google-swe-12345"
+
+    @respx.mock
+    async def test_fetch_raw_handles_http_error_without_fallback(self, respx_mock):
+        """When /search-v2 returns 404 or 500, fetch_raw returns empty list without returning Huron job."""
+        adapter = JSearchAdapter(role="software engineer")
+        
+        respx_mock.get("https://jsearch.p.rapidapi.com/search-v2").mock(
+            return_value=Response(500, json={"message": "Internal server error"})
+        )
+
+        results = await adapter.fetch_raw()
+        assert results == []
+        # Ensure it does NOT fall back to any hardcoded job
+        assert not any("Huron" in str(r) for r in results)
 
     # ── Cross-source normalisation check ─────────────────────────────────────
 

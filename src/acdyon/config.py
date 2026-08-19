@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     jsearch_enabled: bool = Field(default=True, description="Enable JSearch (RapidAPI) adapter.")
     arbeitnow_enabled: bool = Field(default=False, description="Enable Arbeitnow adapter (legacy).")
 
-    # ── RapidAPI Credentials ─────────────────────────────────────────────────
+    # ── RapidAPI & JSearch Configuration ─────────────────────────────────────
     rapidapi_key: str = Field(
         default="e50277eb37msh360b11bca7c1866p1ca014jsn36fef6c35f06",
         description="RapidAPI Key for JSearch API.",
@@ -60,9 +60,21 @@ class Settings(BaseSettings):
         default="jsearch.p.rapidapi.com",
         description="RapidAPI Host header for JSearch API.",
     )
+    jsearch_default_role: str = Field(
+        default="Software Engineer",
+        description="Default role/keyword filter if none is passed by caller.",
+    )
+    jsearch_default_country: str | None = Field(
+        default="us",
+        description="Default 2-letter ISO country code if none is passed (e.g. 'us', 'in', 'gb'). Set to None for country-agnostic global search.",
+    )
+    jsearch_default_location: str | None = Field(
+        default=None,
+        description="Optional city/region filter (e.g. 'Austin', 'Bangalore', 'London').",
+    )
     jsearch_query: str = Field(
-        default="Software developer in USA",
-        description="Search query parameter for JSearch.",
+        default="Software Engineer",
+        description="Alias for jsearch_default_role (backward compatibility).",
     )
 
     # ── HTTP client ───────────────────────────────────────────────────────────
