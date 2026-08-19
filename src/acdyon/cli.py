@@ -82,10 +82,19 @@ def init_db_cmd():
 
 
 @app.command("run")
-def run_cmd():
+def run_cmd(
+    total_jobs: Annotated[
+        int | None,
+        typer.Option(
+            "--total-jobs",
+            "-n",
+            help="Total number of jobs to fetch from JSearch (e.g. 10, 20, 50, 100).",
+        ),
+    ] = None,
+):
     """Execute a one-shot ingestion cycle across all enabled sources."""
     rprint("[bold cyan]Starting ingestion run…[/]")
-    run_logs = _run_async(run_once())
+    run_logs = _run_async(run_once(jsearch_total_jobs=total_jobs))
 
     table = Table(title="Run Results", show_header=True, header_style="bold magenta")
     table.add_column("Source")

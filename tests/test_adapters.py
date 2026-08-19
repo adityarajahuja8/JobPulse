@@ -232,37 +232,208 @@ class TestJSearchAdapter:
 
     # ── Fetch raw with search-v2 endpoint & error handling tests ─────────────
 
+    def test_total_jobs_validation_fails_on_zero_or_negative(self):
+        """total_jobs < 1 must raise ValueError."""
+        import pytest
+
+        with pytest.raises(ValueError, match="total_jobs must be >= 1"):
+            JSearchAdapter(total_jobs=0)
+
+        with pytest.raises(ValueError, match="total_jobs must be >= 1"):
+            JSearchAdapter(total_jobs=-5)
+
     @respx.mock
-    async def test_fetch_raw_calls_search_v2_endpoint_and_preserves_all_jobs(self, respx_mock):
-        """fetch_raw() must call /search-v2 with exact params and preserve all returned jobs."""
-        adapter = JSearchAdapter(role="data analyst", country="in", page=1, num_pages=1)
-        
-        mock_route = respx_mock.get("https://jsearch.p.rapidapi.com/search-v2").mock(
-            return_value=Response(200, json={"status": "OK", "data": {"jobs": JSEARCH_FIXTURE["data"], "cursor": None}})
+    async def test_total_jobs_10_single_request(self, respx_mock):
+        """total_jobs=10 fetches a single batch of 10 jobs."""
+        adapter = JSearchAdapter(role="software engineer", total_jobs=10)
+
+        jobs_batch = [
+            {"job_id": f"job-{i}", "job_title": f"Engineer {i}", "job_apply_link": f"https://example.com/{i}"}
+            for i in range(10)
+        ]
+        respx_mock.get("https://jsearch.p.rapidapi.com/search-v2").mock(
+            return_value=Response(200, json={"status": "OK", "data": {"jobs": jobs_batch, "cursor": "cur-1"}})
         )
 
         results = await adapter.fetch_raw()
-
-        assert mock_route.called
-        req = mock_route.calls.last.request
-        assert req.url.params["query"] == "data analyst"
-        assert req.url.params["country"] == "in"
-        assert len(results) == len(JSEARCH_FIXTURE["data"])
-        assert results[0]["job_id"] == "google-swe-12345"
+        assert len(results) == 10
+        assert len(respx_mock.calls) == 1
 
     @respx.mock
-    async def test_fetch_raw_handles_http_error_without_fallback(self, respx_mock):
-        """When /search-v2 returns 404 or 500, fetch_raw returns empty list without returning Huron job."""
-        adapter = JSearchAdapter(role="software engineer")
-        
+    async def test_total_jobs_20_multi_batch_cursor_pagination(self, respx_mock):
+        """total_jobs=20 makes 2 requests with cursor and returns 20 unique jobs."""
+        adapter = JSearchAdapter(role="software engineer", total_jobs=20)
+
+        batch1 = [
+            {"job_id": f"job-{i}", "job_title": f"Engineer {i}", "job_apply_link": f"https://example.com/{i}"}
+            for i in range(10)
+        ]
+        batch2 = [
+            {"job_id": f"job-{i}", "job_title": f"Engineer {i}", "job_apply_link": f"https://example.com/{i}"}
+            for i in range(10, 20)
+        ]
+
+        route = respx_mock.get("https://jsearch.p.rapidapi.com/search-v2")
+        route.side_effect = [
+            Response(200, json={"status": "OK", "data": {"jobs": batch1, "cursor": "cur-2"}}),
+            Response(200, json={"status": "OK", "data": {"jobs": batch2, "cursor": "cur-3"}}),
+        ]
+
+        results = await adapter.fetch_raw()
+        assert len(results) == 20
+        assert len(respx_mock.calls) == 2
+        assert "cursor" not in respx_mock.calls[0].request.url.params
+        assert respx_mock.calls[1].request.url.params["cursor"] == "cur-2"
+
+    @respx.mock
+    async def test_total_jobs_50_multi_batch_cursor_pagination(self, respx_mock):
+        """total_jobs=50 makes 5 requests with cursor and returns 50 unique jobs."""
+        adapter = JSearchAdapter(role="software engineer", total_jobs=50)
+
+        batches = []
+        for b in range(5):
+            batches.append([
+                {"job_id": f"job-{b}-{i}", "job_title": f"Engineer {b}-{i}", "job_apply_link": f"https://example.com/{b}-{i}"}
+                for i in range(10)
+            ])
+
+        route = respx_mock.get("https://jsearch.p.rapidapi.com/search-v2")
+        route.side_effect = [
+            Response(200, json={"status": "OK", "data": {"jobs": batches[0], "cursor": "c1"}}),
+            Response(200, json={"status": "OK", "data": {"jobs": batches[1], "cursor": "c2"}}),
+            Response(200, json={"status": "OK", "data": {"jobs": batches[2], "cursor": "c3"}}),
+            Response(200, json={"status": "OK", "data": {"jobs": batches[3], "cursor": "c4"}}),
+            Response(200, json={"status": "OK", "data": {"jobs": batches[4], "cursor": "c5"}}),
+        ]
+
+        results = await adapter.fetch_raw()
+        assert len(results) == 50
+        assert len(respx_mock.calls) == 5
+
+    @respx.mock
+    async def test_api_returns_fewer_jobs_than_requested(self, respx_mock):
+        """When API runs out of jobs (e.g. 15 available), return 15 without fabricating more."""
+        adapter = JSearchAdapter(role="specialist", total_jobs=50)
+
+        batch1 = [
+            {"job_id": f"job-{i}", "job_title": f"Specialist {i}", "job_apply_link": f"https://example.com/{i}"}
+            for i in range(10)
+        ]
+        batch2 = [
+            {"job_id": f"job-{i}", "job_title": f"Specialist {i}", "job_apply_link": f"https://example.com/{i}"}
+            for i in range(10, 15)
+        ]
+
+        route = respx_mock.get("https://jsearch.p.rapidapi.com/search-v2")
+        route.side_effect = [
+            Response(200, json={"status": "OK", "data": {"jobs": batch1, "cursor": "c1"}}),
+            Response(200, json={"status": "OK", "data": {"jobs": batch2, "cursor": None}}),  # No more cursor
+        ]
+
+        results = await adapter.fetch_raw()
+        assert len(results) == 15
+        assert len(respx_mock.calls) == 2
+
+    @respx.mock
+    async def test_duplicate_jobs_across_cursor_batches_deduplicated(self, respx_mock):
+        """Duplicate jobs across cursor batches must be deduplicated by job_id."""
+        adapter = JSearchAdapter(role="dev", total_jobs=15)
+
+        batch1 = [
+            {"job_id": f"job-{i}", "job_title": f"Dev {i}", "job_apply_link": "https://ex.com"}
+            for i in range(10)
+        ]
+        # Batch 2 has 5 duplicate jobs from batch 1 and 5 new jobs
+        batch2 = [
+            {"job_id": f"job-{i}", "job_title": f"Dev {i}", "job_apply_link": "https://ex.com"}
+            for i in range(5, 15)
+        ]
+
+        route = respx_mock.get("https://jsearch.p.rapidapi.com/search-v2")
+        route.side_effect = [
+            Response(200, json={"status": "OK", "data": {"jobs": batch1, "cursor": "c1"}}),
+            Response(200, json={"status": "OK", "data": {"jobs": batch2, "cursor": "c2"}}),
+        ]
+
+        results = await adapter.fetch_raw()
+        assert len(results) == 15
+        unique_ids = {r["job_id"] for r in results}
+        assert len(unique_ids) == 15
+
+    @respx.mock
+    async def test_missing_cursor_stops_pagination(self, respx_mock):
+        """If cursor is None/missing in response, pagination terminates cleanly."""
+        adapter = JSearchAdapter(total_jobs=30)
+
+        batch1 = [
+            {"job_id": f"job-{i}", "job_title": f"Dev {i}", "job_apply_link": "https://ex.com"}
+            for i in range(10)
+        ]
         respx_mock.get("https://jsearch.p.rapidapi.com/search-v2").mock(
-            return_value=Response(500, json={"message": "Internal server error"})
+            return_value=Response(200, json={"status": "OK", "data": {"jobs": batch1, "cursor": None}})
         )
+
+        results = await adapter.fetch_raw()
+        assert len(results) == 10
+        assert len(respx_mock.calls) == 1
+
+    @respx.mock
+    async def test_api_error_stops_pagination_safely(self, respx_mock):
+        """If second request returns 500/404, return accumulated results without crashing."""
+        adapter = JSearchAdapter(total_jobs=30)
+
+        batch1 = [
+            {"job_id": f"job-{i}", "job_title": f"Dev {i}", "job_apply_link": "https://ex.com"}
+            for i in range(10)
+        ]
+
+        route = respx_mock.get("https://jsearch.p.rapidapi.com/search-v2")
+        route.side_effect = [
+            Response(200, json={"status": "OK", "data": {"jobs": batch1, "cursor": "c1"}}),
+            Response(500, json={"message": "Internal error"}),
+        ]
+
+        results = await adapter.fetch_raw()
+        assert len(results) == 10
+        assert len(respx_mock.calls) == 2
+
+    @respx.mock
+    async def test_empty_batch_stops_pagination(self, respx_mock):
+        """If a batch returns empty list, stop pagination."""
+        adapter = JSearchAdapter(total_jobs=30)
+
+        route = respx_mock.get("https://jsearch.p.rapidapi.com/search-v2")
+        route.side_effect = [
+            Response(200, json={"status": "OK", "data": {"jobs": [], "cursor": "c1"}}),
+        ]
 
         results = await adapter.fetch_raw()
         assert results == []
-        # Ensure it does NOT fall back to any hardcoded job
-        assert not any("Huron" in str(r) for r in results)
+        assert len(respx_mock.calls) == 1
+
+    @respx.mock
+    async def test_requested_total_is_never_exceeded(self, respx_mock):
+        """When API returns 10 jobs per batch and total_jobs=12, only 12 jobs are returned."""
+        adapter = JSearchAdapter(total_jobs=12)
+
+        batch1 = [
+            {"job_id": f"job-{i}", "job_title": f"Dev {i}", "job_apply_link": "https://ex.com"}
+            for i in range(10)
+        ]
+        batch2 = [
+            {"job_id": f"job-{i}", "job_title": f"Dev {i}", "job_apply_link": "https://ex.com"}
+            for i in range(10, 20)
+        ]
+
+        route = respx_mock.get("https://jsearch.p.rapidapi.com/search-v2")
+        route.side_effect = [
+            Response(200, json={"status": "OK", "data": {"jobs": batch1, "cursor": "c1"}}),
+            Response(200, json={"status": "OK", "data": {"jobs": batch2, "cursor": "c2"}}),
+        ]
+
+        results = await adapter.fetch_raw()
+        assert len(results) == 12
+        assert len(respx_mock.calls) == 2
 
     # ── Cross-source normalisation check ─────────────────────────────────────
 

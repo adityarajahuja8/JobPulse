@@ -72,6 +72,12 @@ class Settings(BaseSettings):
         default=None,
         description="Optional city/region filter (e.g. 'Austin', 'Bangalore', 'London').",
     )
+    jsearch_total_jobs: int = Field(
+        default=10,
+        ge=1,
+        le=500,
+        description="Default number of unique jobs to collect from JSearch (via cursor pagination).",
+    )
     jsearch_query: str = Field(
         default="Software Engineer",
         description="Alias for jsearch_default_role (backward compatibility).",

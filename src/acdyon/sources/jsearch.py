@@ -26,6 +26,9 @@ log = structlog.get_logger(__name__)
 
 _API_URL = "https://jsearch.p.rapidapi.com/search-v2"
 
+# Safety limit for maximum pagination requests to prevent runaway cursor loops
+MAX_PAGINATION_REQUESTS = 20
+
 # Required keys in raw JSearch listing objects
 _REQUIRED_KEYS = frozenset({"job_id", "job_title", "job_apply_link"})
 
@@ -171,11 +174,12 @@ class JSearchAdapter(SourceAdapter):
         country: Any = _UNSET,
         location: str | None = None,
         remote_only: bool = False,
+        total_jobs: int | None = None,
         page: int = 1,
         num_pages: int = 1,
         date_posted: str = "all",
     ) -> None:
-        """Initialize JSearch adapter with decoupled role, country, and location parameters.
+        """Initialize JSearch adapter with decoupled role, country, and total_jobs parameters.
 
         Args:
             role: Free-text job title/keyword (e.g. "data analyst", "frontend engineer").
@@ -184,8 +188,9 @@ class JSearchAdapter(SourceAdapter):
                      Defaults to settings.jsearch_default_country if omitted. Pass None for country-agnostic global search.
             location: Specific city/state (e.g. "Austin", "Bangalore"). Never concatenated into query.
             remote_only: If True, sets work_from_home="true".
-            page: Starting page number for pagination (1-indexed).
-            num_pages: Number of pages to retrieve via cursor pagination (default: 1).
+            total_jobs: Target number of unique job listings to collect via cursor pagination (default: settings.jsearch_total_jobs).
+            page: Starting page (legacy compatibility).
+            num_pages: Backward compatibility parameter for pagination.
             date_posted: Posting freshness filter ('all', 'today', '3days', 'week', 'month').
         """
         self.role = role.strip() if role else settings.jsearch_default_role
@@ -199,6 +204,15 @@ class JSearchAdapter(SourceAdapter):
 
         self.location = location.strip() if location else settings.jsearch_default_location
         self.remote_only = remote_only
+
+        # Validate total_jobs
+        if total_jobs is not None:
+            if total_jobs < 1:
+                raise ValueError(f"total_jobs must be >= 1, got {total_jobs}")
+            self.total_jobs = min(total_jobs, 500)
+        else:
+            self.total_jobs = settings.jsearch_total_jobs
+
         self.page = max(1, page)
         self.num_pages = max(1, num_pages)
         self.date_posted = date_posted
@@ -210,7 +224,7 @@ class JSearchAdapter(SourceAdapter):
         )
 
     def build_request_params(self, cursor: str | None = None) -> dict[str, Any]:
-        """Construct the exact query parameters dictionary sent to JSearch /search-v2.
+        """Construct the query parameters dictionary sent to JSearch /search-v2.
 
         Guarantees:
         1. 'query' parameter contains ONLY the role/keywords — NEVER location/country text.
@@ -221,7 +235,7 @@ class JSearchAdapter(SourceAdapter):
         """
         params: dict[str, Any] = {
             "query": self.role,
-            "num_pages": str(self.num_pages),
+            "num_pages": "1",
             "date_posted": self.date_posted,
         }
 
@@ -249,10 +263,12 @@ class JSearchAdapter(SourceAdapter):
 
         Guarantees:
         - Calls ONLY GET https://jsearch.p.rapidapi.com/search-v2
-        - Supports cursor-based multi-page pagination when num_pages > 1
-        - Preserves all valid jobs returned by JSearch
+        - Continues cursor pagination until total_jobs is reached or cursor/jobs exhausted
+        - Preserves all unique jobs returned by JSearch up to total_jobs
+        - Deduplicates across batches using job_id
         - Never uses hardcoded job_id or fallback to static/fake jobs
-        - Logs detailed HTTP/API diagnostics on success or failure without exposing the API key
+        - Safety limit: MAX_PAGINATION_REQUESTS prevents infinite loops
+        - Logs detailed HTTP/API diagnostics without exposing the API key
         """
         base_params = self.build_request_params()
         log.info(
@@ -263,7 +279,7 @@ class JSearchAdapter(SourceAdapter):
             country=self.country,
             location=self.location,
             remote_only=self.remote_only,
-            num_pages=self.num_pages,
+            total_jobs=self.total_jobs,
         )
 
         if not settings.rapidapi_key or settings.rapidapi_key == "your_rapidapi_key_here":
@@ -282,9 +298,11 @@ class JSearchAdapter(SourceAdapter):
         all_listings: list[dict[str, Any]] = []
         seen_job_ids: set[str] = set()
         cursor: str | None = None
+        requests_made = 0
 
         async with build_client(headers=headers) as client:
-            for page_idx in range(1, self.num_pages + 1):
+            while len(all_listings) < self.total_jobs and requests_made < MAX_PAGINATION_REQUESTS:
+                requests_made += 1
                 req_params = self.build_request_params(cursor=cursor)
                 try:
                     response = await client.get(_API_URL, params=req_params)
@@ -297,6 +315,7 @@ class JSearchAdapter(SourceAdapter):
                             params=req_params,
                             status_code=status_code,
                             error_body=response.text[:500],
+                            requests_made=requests_made,
                         )
                         break
 
@@ -316,12 +335,12 @@ class JSearchAdapter(SourceAdapter):
                         log.info(
                             "jsearch.fetch_raw.empty_batch",
                             endpoint=_API_URL,
-                            page_idx=page_idx,
+                            requests_made=requests_made,
                             total_so_far=len(all_listings),
                         )
                         break
 
-                    # Append unique jobs from this batch
+                    # Append unique jobs from this batch up to total_jobs
                     new_in_batch = 0
                     for j in batch_jobs:
                         jid = str(j.get("job_id") or "")
@@ -329,22 +348,27 @@ class JSearchAdapter(SourceAdapter):
                             seen_job_ids.add(jid)
                             all_listings.append(j)
                             new_in_batch += 1
+                            if len(all_listings) >= self.total_jobs:
+                                break
                         elif not jid:
                             all_listings.append(j)
                             new_in_batch += 1
+                            if len(all_listings) >= self.total_jobs:
+                                break
 
                     log.info(
                         "jsearch.fetch_raw.batch_done",
                         endpoint=_API_URL,
-                        page_idx=page_idx,
+                        requests_made=requests_made,
                         batch_received=len(batch_jobs),
                         new_added=new_in_batch,
                         total_accumulated=len(all_listings),
+                        target_total_jobs=self.total_jobs,
                         has_next_cursor=bool(next_cursor),
                     )
 
-                    # If no more cursor or we reached requested page count, stop
-                    if not next_cursor or page_idx >= self.num_pages:
+                    # Stop if target total reached or no further cursor returned
+                    if len(all_listings) >= self.total_jobs or not next_cursor:
                         break
 
                     cursor = next_cursor
@@ -356,6 +380,7 @@ class JSearchAdapter(SourceAdapter):
                         params=req_params,
                         status_code=exc.response.status_code if exc.response else None,
                         error=str(exc),
+                        requests_made=requests_made,
                     )
                     break
                 except httpx.RequestError as exc:
@@ -364,6 +389,7 @@ class JSearchAdapter(SourceAdapter):
                         endpoint=_API_URL,
                         params=req_params,
                         error=str(exc),
+                        requests_made=requests_made,
                     )
                     break
                 except Exception as exc:
@@ -372,16 +398,19 @@ class JSearchAdapter(SourceAdapter):
                         endpoint=_API_URL,
                         params=req_params,
                         error=str(exc),
+                        requests_made=requests_made,
                     )
                     break
 
+        result = all_listings[: self.total_jobs]
         log.info(
             "jsearch.fetch_raw.done",
             endpoint=_API_URL,
-            total_jobs_returned=len(all_listings),
-            pages_fetched=self.num_pages,
+            requests_made=requests_made,
+            target_total_jobs=self.total_jobs,
+            total_jobs_returned=len(result),
         )
-        return all_listings
+        return result
 
     def validate(self, raw: list[dict[str, Any]]) -> ValidationResult:
         return self._validator.validate_raw(raw)

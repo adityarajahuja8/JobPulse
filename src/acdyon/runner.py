@@ -33,13 +33,13 @@ from acdyon.sources.remoteok import RemoteOKAdapter
 log = structlog.get_logger(__name__)
 
 
-def _build_adapter_chain() -> list[SourceAdapter]:
+def _build_adapter_chain(jsearch_total_jobs: int | None = None) -> list[SourceAdapter]:
     """Return enabled adapters in priority order: RemoteOK first, JSearch second."""
     chain: list[SourceAdapter] = []
     if settings.remoteok_enabled:
         chain.append(RemoteOKAdapter())
     if settings.jsearch_enabled:
-        chain.append(JSearchAdapter())
+        chain.append(JSearchAdapter(total_jobs=jsearch_total_jobs))
     return chain
 
 
@@ -159,12 +159,15 @@ async def _run_adapter(
     return run_log
 
 
-async def run_once() -> list[dict[str, Any]]:
+async def run_once(jsearch_total_jobs: int | None = None) -> list[dict[str, Any]]:
     """Execute one full ingestion cycle across all enabled adapters.
 
     Returns a list of run-log dicts (one per adapter).
     """
-    adapters = _build_adapter_chain()
+    if jsearch_total_jobs is not None:
+        adapters = _build_adapter_chain(jsearch_total_jobs=jsearch_total_jobs)
+    else:
+        adapters = _build_adapter_chain()
     if not adapters:
         log.warning("runner.no_adapters_enabled")
         return []
