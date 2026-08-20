@@ -21,10 +21,17 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Enable CORS for Vite dev server (port 3000)
+# Enable CORS for Vercel production frontend & local dev server (ports 3000 / 5173)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://job-pulse-green.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "*"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,7 +47,8 @@ async def root():
             "health": "/api/health",
             "listings": "/api/listings",
             "stats": "/api/stats",
-            "run": "/api/run"
+            "run": "/api/run",
+            "ingest": "/api/ingest"
         }
     }
 
@@ -54,7 +62,7 @@ async def health():
 @app.get("/api/listings")
 async def get_listings(
     source: str | None = Query(default=None, description="Filter by source (remoteok | jsearch)"),
-    limit: int = Query(default=50, ge=1, le=200, description="Max listings to return"),
+    limit: int = Query(default=200, ge=1, le=1000, description="Max listings to return"),
     force_refresh: bool = Query(default=False, description="Run live ingestion before returning"),
 ) -> dict[str, Any]:
     """Retrieve normalized job listings from MongoDB, or trigger a live fetch."""
@@ -132,6 +140,7 @@ async def get_stats() -> dict[str, Any]:
 
 
 @app.post("/api/run")
+@app.post("/api/ingest")
 async def trigger_run() -> dict[str, Any]:
     """Trigger a live ingestion cycle immediately."""
     run_logs = await run_once()
@@ -141,3 +150,4 @@ async def trigger_run() -> dict[str, Any]:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("acdyon.server:app", host="0.0.0.0", port=8000, reload=True)
+

@@ -21,6 +21,13 @@ from acdyon.config import settings
 
 log = structlog.get_logger(__name__)
 
+# ── Collections ───────────────────────────────────────────────────────────────
+
+LISTINGS_COLL = "job_listings"
+RUN_LOGS_COLL = "run_logs"
+DEAD_LETTERS_COLL = "dead_letters"
+SCHEMA_SNAPSHOTS_COLL = "schema_snapshots"
+
 # ── Client ────────────────────────────────────────────────────────────────────
 
 _client: motor.motor_asyncio.AsyncIOMotorClient | None = None

@@ -26,18 +26,17 @@ const DEMO_DATA = {
       url: "https://remoteok.com/remote-jobs/remote-solutions-delivery-manager-benchling-1136937"
     },
     jsearch: {
-      job_id: "linear-d3bc1ced-3ce4-4086-a050-555055dbb1ff",
-      employer_name: "Linear",
-      job_title: "Senior / Staff Fullstack Engineer",
+      job_id: "jsearch-sample-8821",
+      employer_name: "Tech Solutions",
+      job_title: "Senior Fullstack Engineer",
       job_city: "Remote",
-      job_state: "Europe",
-      job_country: "Worldwide",
+      job_country: "US",
       job_is_remote: true,
       job_min_salary: 170000,
       job_max_salary: 240000,
       job_employment_type: "FULLTIME",
-      job_required_skills: ["typescript", "react", "node", "distributed-systems"],
-      job_apply_link: "https://jobs.ashbyhq.com/linear/d3bc1ced-3ce4-4086-a050-555055dbb1ff"
+      job_required_skills: ["typescript", "react", "node", "python"],
+      job_apply_link: "https://jsearch.p.rapidapi.com/sample"
     }
   },
   normalized: SAMPLE_LISTINGS.slice(0, 2)
@@ -267,83 +266,55 @@ function initListingsSection() {
     });
   });
 
-  // ── Real-Time Pipeline Ingestion Engine (Runs on page load & on demand) ───────
-  async function executeRealtimePipeline() {
+  // ── Server-Driven Listings Loader ──────────────────────────────────────────────
+  const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+
+  async function fetchListingsFromBackend(triggerIngestion = false) {
     const triggerBtn = document.getElementById('btn-trigger-ingestion');
     if (triggerBtn) {
       triggerBtn.disabled = true;
       triggerBtn.innerHTML = `
         <div class="loading-spinner" style="width: 14px; height: 14px; border-width: 2px; margin: 0;"></div>
-        Ingesting Live Feeds...
+        Ingesting via Backend API...
       `;
     }
 
     if (countBadge) {
-      countBadge.innerHTML = `<span class="pipeline-running-badge">⚡ Ingesting Live Streams...</span>`;
+      countBadge.innerHTML = `<span class="pipeline-running-badge">⚡ Fetching Backend Listings...</span>`;
     }
 
-    container.innerHTML = `
-      <div style="grid-column: 1 / -1; padding: var(--space-12); text-align: center; background: rgba(13, 18, 31, 0.4); border: 1px dashed var(--border-subtle); border-radius: var(--radius-lg);">
-        <div class="loading-spinner"></div>
-        <div style="font-family: var(--font-mono); font-size: var(--text-sm); color: var(--accent-primary); margin-top: var(--space-4);">
-          ⚡ RUNNING REAL-TIME PIPELINE INGESTION...
-        </div>
-        <div style="font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-2);">
-          Pulling fresh live streams from RemoteOK API & JSearch (/search-v2)...
-        </div>
-      </div>
-    `;
-
-    const startTime = performance.now();
-    let liveJobs = [];
-
     try {
-      const apiBase = import.meta.env.VITE_API_URL ? String(import.meta.env.VITE_API_URL).replace(/\/$/, '') : '';
-      const resp = await fetch(`${apiBase}/api/listings`);
+      if (triggerIngestion) {
+        // Trigger live ingestion cycle on Python backend API
+        await fetch(`${API_BASE_URL}/api/ingest`, { method: 'POST' }).catch(() => {});
+      }
+
+      const resp = await fetch(`${API_BASE_URL}/api/listings`);
       if (resp.ok) {
         const payload = await resp.json();
         if (payload && Array.isArray(payload.data)) {
-          liveJobs = payload.data;
+          activeListings = deduplicateListings(payload.data);
+          const rokCount = activeListings.filter(j => j.source === 'remoteok').length;
+          const jsCount = activeListings.filter(j => j.source === 'jsearch').length;
+          console.log(`[JobPulse API] Backend listings loaded: total=${activeListings.length} (RemoteOK=${rokCount}, JSearch=${jsCount})`);
         }
       }
     } catch (err) {
-      console.warn('[Pipeline Live Ingestion Notice]:', err.message);
+      console.warn('[JobPulse API Notice]:', err.message);
     }
 
-    // Fallback to sample listings if live endpoint is unreachable
-    if (liveJobs.length === 0) {
-      liveJobs = Array.isArray(SAMPLE_LISTINGS) ? SAMPLE_LISTINGS : [];
+    // Fallback to sample listings only if live API is completely unreachable
+    if (activeListings.length === 0) {
+      activeListings = Array.isArray(SAMPLE_LISTINGS) ? deduplicateListings(SAMPLE_LISTINGS) : [];
     }
 
-    const rokJobs = liveJobs.filter(j => j.source === 'remoteok');
-    const jsJobs = liveJobs.filter(j => j.source === 'jsearch');
-    const uniqueList = deduplicateListings(liveJobs);
-    const duplicatesRemoved = liveJobs.length - uniqueList.length;
-
-    const elapsedMs = Math.round(performance.now() - startTime);
-
-    console.group(`%c⚡ ACDYON PIPELINE CYCLE %c${new Date().toLocaleTimeString()}`, 'color: #38bdf8; font-weight: bold;', 'color: #94a3b8;');
-    console.log('%c[info]%c runner.cycle.start adapters=["remoteok", "jsearch"]', 'color: #38bdf8; font-weight: bold;', 'color: #e2e8f0;');
-    console.log(`%c[info]%c remoteok.fetch_raw.done count=${rokJobs.length}`, 'color: #38bdf8; font-weight: bold;', 'color: #e2e8f0;');
-    console.log(`%c[info]%c jsearch.fetch_raw.done count=${jsJobs.length}`, 'color: #38bdf8; font-weight: bold;', 'color: #e2e8f0;');
-    console.log(`%c[info]%c deduplicate.done unique_count=${uniqueList.length} duplicates_removed=${duplicatesRemoved}`, 'color: #10b981; font-weight: bold;', 'color: #e2e8f0;');
-    console.log(`%c[info]%c runner.cycle.done duration=${(elapsedMs / 1000).toFixed(2)}s errors=0 blocks=0`, 'color: #10b981; font-weight: bold;', 'color: #e2e8f0;');
-
-    console.table([
-      { Source: 'RemoteOK', Status: '✓ Active', 'Total Fetched': rokJobs.length, Role: 'Primary' },
-      { Source: 'JSearch (RapidAPI)', Status: '✓ Active', 'Total Fetched': jsJobs.length, Role: 'Backup / ATS' },
-      { Source: 'Total Live Unified', Status: '✓ Healthy', 'Total Fetched': uniqueList.length, Role: 'Deduplicated' }
-    ]);
-    console.groupEnd();
-
-    activeListings = uniqueList;
     render(currentFilter, 1);
 
     if (triggerBtn) {
       triggerBtn.disabled = false;
       triggerBtn.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-        Re-run Pipeline
+        Run Pipeline Ingestion
       `;
     }
   }
@@ -352,7 +323,7 @@ function initListingsSection() {
   const triggerBtn = document.getElementById('btn-trigger-ingestion');
   if (triggerBtn) {
     triggerBtn.addEventListener('click', () => {
-      executeRealtimePipeline();
+      fetchListingsFromBackend(true);
     });
   }
 
@@ -360,15 +331,15 @@ function initListingsSection() {
   const navPulseBadge = document.querySelector('.pulse-badge');
   if (navPulseBadge) {
     navPulseBadge.style.cursor = 'pointer';
-    navPulseBadge.title = 'Click to trigger live pipeline ingestion';
+    navPulseBadge.title = 'Click to trigger backend ingestion';
     navPulseBadge.addEventListener('click', () => {
-      executeRealtimePipeline();
+      fetchListingsFromBackend(true);
       document.getElementById('listings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }
 
-  // 🚀 AUTOMATICALLY EXECUTE REAL-TIME INGESTION WHEN USER OPENS WEBSITE
-  executeRealtimePipeline();
+  // Initial load from backend API
+  fetchListingsFromBackend(false);
 }
 
 function escapeHTML(str) {
