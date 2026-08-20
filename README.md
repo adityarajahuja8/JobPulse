@@ -1,22 +1,47 @@
-# JobPulse (Acdyon Pipeline)
+# JobPulse (Acdyon Ingestion Engine)
 
-[![Tests](https://img.shields.io/badge/tests-45%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-66%20passed-brightgreen.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
 [![Vite](https://img.shields.io/badge/vite-5.4+-646CFF.svg)](https://vitejs.dev)
 
-A resilient, ethical, and fully observable job-listing ingestion pipeline and live dashboard.
+A resilient, ethical, and 100% server-driven job-listing ingestion engine and live web client.
 
-Pulls job listings from **RemoteOK** (primary) and **JSearch RapidAPI** (backup / enterprise tech stream), normalises them into a unified schema, and stores them in MongoDB with compound unique index deduplication. Features log-normal pacing jitter, 5-step exponential fallback ladder, schema-drift detection, and dead-letter queuing.
+Pulls job listings from **RemoteOK** and **JSearch RapidAPI** (`/search-v2`), normalizes them into a unified canonical schema, stores them in MongoDB with compound unique index deduplication, and serves them via a Python FastAPI REST API.
 
 ---
 
-## Live Demo & Architecture
+## Architecture Overview
+
+```
+Vercel Frontend (https://job-pulse-green.vercel.app)
+      │
+      │ HTTPS (VITE_API_BASE_URL)
+      ▼
+Deployed Python FastAPI Backend (/api/listings & /api/ingest)
+      │
+      ├──── MongoDB (job_listings collection)
+      │
+      ├──── RemoteOK API
+      │
+      └──── JSearch RapidAPI (/search-v2)
+```
+
+- **Single Source of Truth**: The Python backend manages all ingestion and database queries. The browser does **not** directly query external APIs or run client-side ingestion logic.
+- **Resilient Pipeline**: Log-normal pacing jitter, 5-step exponential fallback ladder, schema-drift detection, and dead-letter queuing.
+- **Zero API Secrets Leakage**: `RAPIDAPI_KEY` and `MONGODB_URL` remain strictly secured on the backend. Frontend only references `VITE_API_BASE_URL`.
+
+---
+
+## Live Demo & Endpoints
 
 - **GitHub Repository**: [github.com/adityarajahuja8/JobPulse](https://github.com/adityarajahuja8/JobPulse)
-- **Frontend Dashboard**: Vite + HTML/CSS/JS with live streaming, search/filter chips, and 8-item pagination.
-- **Backend API**: FastAPI REST endpoints on port 8000 (`GET /api/listings`, `GET /api/stats`, `POST /api/run`).
-- **CLI Engine**: Typer-powered pipeline manager (`init-db`, `run`, `watch`, `stats`, `sources`, `deadletter`).
+- **Deployed Frontend**: [job-pulse-green.vercel.app](https://job-pulse-green.vercel.app/)
+- **Backend Endpoints**:
+  - `GET /api/listings` — Returns normalized job listings directly from MongoDB (`limit=200`, sorted by `posted_at DESC`). Filterable by `source` (`remoteok` | `jsearch`).
+  - `POST /api/ingest` — Triggers an on-demand live pipeline ingestion cycle.
+  - `GET /api/stats` — Pipeline telemetry and run logs.
+  - `GET /api/health` — API health check.
 
 ---
 
@@ -49,35 +74,49 @@ cp .env.example .env
 python -m acdyon.cli init-db
 ```
 
-Creates unique compound index `(source, external_id)` ensuring 100% idempotent upserts.
+Creates unique compound index `(source, external_id)` on `job_listings` ensuring 100% idempotent upserts.
 
-### 4. Run One-Shot Ingestion
+### 4. Run Pipeline Ingestion
 
 ```bash
 python -m acdyon.cli run
 ```
 
-Fetches from RemoteOK and JSearch, normalizes, detects anomalies/drift, and upserts into MongoDB.
+Fetches from RemoteOK and JSearch, normalizes documents, checks schema drift, and upserts into MongoDB.
 
-```
-                          Run Results                           
-┌──────────┬──────────┬─────┬─────────┬────────┬───────┬───────┐
-│ Source   │ Listings │ New │ Updated │ Blocks │ Drift │ Error │
-├──────────┼──────────┼─────┼─────────┼────────┼───────┼───────┤
-│ remoteok │      100 │   0 │     100 │      0 │   ✓   │ None  │
-│ jsearch  │        8 │   0 │       8 │      0 │   ✓   │ None  │
-└──────────┴──────────┴─────┴─────────┴────────┴───────┴───────┘
+### 5. Start Backend Server & Web Frontend
+
+**Backend (FastAPI on port 8000)**:
+```bash
+python -m uvicorn acdyon.server:app --port 8000 --reload
 ```
 
-### 5. Launch the Web Frontend Dashboard
-
+**Frontend (Vite on port 3000)**:
 ```bash
 cd web
 npm install
 npm run dev
 ```
 
-Open **`http://localhost:3000`** in your browser.
+Open **`http://localhost:3000`** in your browser. Local API requests (`/api/*`) are automatically proxied to `http://localhost:8000`.
+
+---
+
+## Environment Variables
+
+### Backend (`.env`)
+```env
+MONGODB_URL=mongodb://localhost:27017/acdyon
+RAPIDAPI_KEY=your_rapidapi_key_here
+RAPIDAPI_HOST=jsearch.p.rapidapi.com
+REMOTEOK_ENABLED=true
+JSEARCH_ENABLED=true
+```
+
+### Frontend (`web/.env` or Vercel Environment Variables)
+```env
+VITE_API_BASE_URL=https://your-backend-api.com
+```
 
 ---
 
@@ -85,7 +124,7 @@ Open **`http://localhost:3000`** in your browser.
 
 | Command | Description |
 |---|---|
-| `python -m acdyon.cli init-db` | Create MongoDB indexes |
+| `python -m acdyon.cli init-db` | Create MongoDB indexes on `job_listings`, `run_logs`, etc. |
 | `python -m acdyon.cli run` | Execute one-shot ingestion from all enabled sources |
 | `python -m acdyon.cli watch` | Scheduled continuous background ingestion |
 | `python -m acdyon.cli stats` | View last N run performance logs |
@@ -94,39 +133,15 @@ Open **`http://localhost:3000`** in your browser.
 
 ---
 
-## Pipeline Architecture
-
-```
-RemoteOK API ──────┐
-                   ├── SourceAdapter (base.py)
-JSearch RapidAPI ──┘        │
-                            ▼
-                   pacing.py (log-normal distribution)
-                   validator.py (schema drift & block detection)
-                   fallback.py (5-step back-off ladder)
-                            │
-                            ▼
-                   runner.py (orchestrates ingestion cycle)
-                            │
-                            ▼
-                   db.py → MongoDB
-                   ├── job_listings    (compound unique index)
-                   ├── run_logs        (cycle metrics & timings)
-                   ├── schema_snapshots (drift detection baseline)
-                   └── dead_letters    (quarantined anomalies)
-```
-
----
-
 ## Running Automated Tests
 
 ```bash
-python -m pytest tests/ -v
+python -m pytest
 ```
 
-**45 unit & integration tests** cover:
-- Adapters (RemoteOK & JSearch parsing, direct link verification, date handling)
-- Pacing engine (Log-normal distribution, μ/σ drift bounds)
-- Fallback ladder (Circuit-breaker, exponential back-off)
-- Schema drift & block-page detection (HTML challenge / Captcha traps)
-- Database upsert idempotency & compound uniqueness
+**66 unit & integration tests** cover:
+- **Server & Database**: `GET /api/listings` MongoDB queries, collection constants (`db.LISTINGS_COLL`), source filtering (`remoteok` / `jsearch`), CORS headers, and `POST /api/ingest`.
+- **Adapters**: RemoteOK & JSearch parsing, direct link verification, date handling.
+- **Pacing**: Log-normal distribution and delay bounds.
+- **Validator**: Schema drift & block-page detection.
+- **Fallback**: Circuit-breaker and 5-step de-escalation ladder.
